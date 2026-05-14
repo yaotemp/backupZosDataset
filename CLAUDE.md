@@ -10,9 +10,8 @@ mvn clean package
 # Produces: target/dataset-backup-1.0.0.jar
 
 # Run on z/OS (JZOS library provided by the z/OS JVM).
-# -Dfile.encoding=UTF-8 is REQUIRED — the z/OS JVM defaults to EBCDIC (Cp1047),
-# which produces garbled console output on USS terminals that expect UTF-8.
-java -Dfile.encoding=UTF-8 -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup [path/to/config.yaml]
+# Encoding is handled internally (System.out/err + logback charset), no JVM flags needed.
+java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup [path/to/config.yaml]
 ```
 
 There are no tests yet — the project has no test source directory.

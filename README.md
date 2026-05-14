@@ -67,14 +67,16 @@ On z/OS, the JZOS library is already on the JVM classpath, so you only need:
 ### Using the bundled config (from classpath)
 
 ```bash
-java -Dfile.encoding=UTF-8 -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup
+java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup
 ```
 
 ### Using an external config file
 
 ```bash
-java -Dfile.encoding=UTF-8 -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup /path/to/config.yaml
+java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup /path/to/config.yaml
 ```
+
+> **Encoding:** The utility forces `System.out`/`System.err` and logback appenders to UTF-8 at startup, so it works correctly on z/OS USS terminals without extra JVM flags.
 
 The utility searches for the config file in this order:
 1. **External file** — the path provided as a command-line argument

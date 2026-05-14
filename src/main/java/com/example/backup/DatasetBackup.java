@@ -8,6 +8,8 @@ import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
 
 import java.io.InputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -31,6 +33,11 @@ public final class DatasetBackup {
     }
 
     public static void main(String[] args) {
+        // Force stdout/stderr to UTF-8. The z/OS JVM defaults to EBCDIC (Cp1047),
+        // which produces garbled output on USS terminals.
+        System.setOut(new PrintStream(System.out, true, StandardCharsets.UTF_8));
+        System.setErr(new PrintStream(System.err, true, StandardCharsets.UTF_8));
+
         String configPath = (args.length >= 1) ? args[0] : DEFAULT_CONFIG;
 
         BackupConfig config = loadConfig(configPath);
