@@ -1,0 +1,12 @@
+# Dataset Backup Configuration
+# List the source dataset names to back up.
+# The backup target DSN is generated automatically by appending a timestamp:
+#   <sourceDsn>.D<yyMMdd>.T<HHmmss>
+#
+# Example:
+#   QREF.REPORT.FILE  ->  QREF.REPORT.FILE.D260514.T144500
+
+backups:
+  - QREF.REPORT.FILE
+  - PROD.DATA.MASTER
+  - PROD.TRANS.DAILY
