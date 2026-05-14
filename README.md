@@ -58,29 +58,22 @@ mvn clean package
 
 This produces `target/dataset-backup-1.0.0.jar`.
 
-> **Note:** The `com.ibm.jzos` dependency has `provided` scope — it is supplied by the z/OS JVM at runtime. To compile locally off-mainframe, install the JZOS JAR into your local Maven repo:
->
-> ```bash
-> mvn install:install-file \
->     -Dfile=/path/to/ibmjzos.jar \
->     -DgroupId=com.ibm \
->     -DartifactId=jzos \
->     -Dversion=2.4 \
->     -Dpackaging=jar
-> ```
+> **Note:** The `com.ibm.jzos` dependency uses a compile stub from Maven Central (`com.ibm.jzos:ibm.jzos:3.1.3.3`, scope `provided`). It compiles anywhere, but only runs on z/OS where the real JZOS library is provided by the JVM.
 
 ## Usage
+
+On z/OS, the JZOS library is already on the JVM classpath, so you only need:
 
 ### Using the bundled config (from classpath)
 
 ```bash
-java -cp dataset-backup-1.0.0.jar:$JZOS_JAR com.example.backup.DatasetBackup
+java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup
 ```
 
 ### Using an external config file
 
 ```bash
-java -cp dataset-backup-1.0.0.jar:$JZOS_JAR com.example.backup.DatasetBackup /path/to/config.yaml
+java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup /path/to/config.yaml
 ```
 
 The utility searches for the config file in this order:
