@@ -42,7 +42,7 @@ public final class DatasetBackup {
         }
 
         log.info("=======================================================");
-        log.info("  Dataset Backup — {} job(s) loaded", backups.size());
+        log.info("  Dataset Backup - {} job(s) loaded", backups.size());
         log.info("  Config file: {}", configPath);
         log.info("=======================================================");
 

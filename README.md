@@ -67,13 +67,13 @@ On z/OS, the JZOS library is already on the JVM classpath, so you only need:
 ### Using the bundled config (from classpath)
 
 ```bash
-java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup
+java -Dfile.encoding=UTF-8 -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup
 ```
 
 ### Using an external config file
 
 ```bash
-java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup /path/to/config.yaml
+java -Dfile.encoding=UTF-8 -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup /path/to/config.yaml
 ```
 
 The utility searches for the config file in this order:
