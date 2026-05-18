@@ -92,7 +92,7 @@ java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup
 java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup /path/to/my-config.yaml
 ```
 
-> **Encoding:** The utility forces `System.out`/`System.err` to UTF-8 at startup, so it works correctly on z/OS USS terminals without extra JVM flags.
+> **Encoding:** The utility uses the JVM's default encoding (typically IBM-1047 on z/OS USS). No UTF-8 forcing is done, so output displays correctly on EBCDIC terminals.
 
 ## Output
 
