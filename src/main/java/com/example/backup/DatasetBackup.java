@@ -3,45 +3,16 @@ package com.example.backup;
 import com.ibm.jzos.ZFile;
 import org.apache.log4j.Logger;
 import org.apache.log4j.PropertyConfigurator;
-import org.yaml.snakeyaml.LoaderOptions;
-import org.yaml.snakeyaml.Yaml;
-import org.yaml.snakeyaml.constructor.Constructor;
 
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.List;
 
 public final class DatasetBackup {
 
     private static final Logger log = Logger.getLogger(DatasetBackup.class);
 
-    private static final DateTimeFormatter DATE_QUALIFIER_FORMAT = DateTimeFormatter.ofPattern("'D'yyMMdd");
-
-    private static final DateTimeFormatter TIME_QUALIFIER_FORMAT = DateTimeFormatter.ofPattern("'T'HHmmss");
-
-    private static final String DEFAULT_CONFIG = "config.yaml";
     private static final String DEFAULT_LOG4J_CONFIG = "log4j.properties";
-
-    /*
-     * QuickRef report output attributes from JCL:
-     *
-     * DCB=(RECFM=VBA,LRECL=450,BLKSIZE=6000),
-     * SPACE=(CYL,(5,5),RLSE),UNIT=SYSDA
-     *
-     * For BPXWDYN, we use minimal required attributes first:
-     * RECFM=VBA, LRECL=450, CYL SPACE(5,5), UNIT=SYSDA.
-     */
-    private static final int QUICKREF_LRECL = 450;
-
-    /*
-     * Set to true if you only want to run allocation tests and exit.
-     * Set to false to run allocation tests first, then continue with backup jobs.
-     */
-    private static final boolean ALLOCATION_SELF_TEST_ONLY = false;
 
     private DatasetBackup() {
     }
@@ -49,52 +20,28 @@ public final class DatasetBackup {
     public static void main(String[] args) {
         initLog4j();
 
-        String configPath = (args.length >= 1) ? args[0] : DEFAULT_CONFIG;
-
-        BackupConfig config = loadConfig(configPath);
-        List<String> backups = config.getBackups();
-
-        if (backups == null || backups.isEmpty()) {
-            log.error("No backup entries found in " + configPath);
+        if (args.length < 2) {
+            log.error("Usage: java -cp dataset-backup-1.0.0.jar "
+                    + "com.example.backup.DatasetBackup <sourceDsn> <targetDsn>");
+            log.error("Example: java -cp dataset-backup-1.0.0.jar "
+                    + "com.example.backup.DatasetBackup "
+                    + "BDX53.QW.FREESPCE.MEF BDX53.MEF.D260518.T130000");
             System.exit(8);
         }
 
-        log.info("=======================================================");
-        log.info("  Dataset Backup - " + backups.size() + " job(s) loaded");
-        log.info("  Config file: " + configPath);
-        log.info("=======================================================");
+        String sourceDsn = normalizeDsn(args[0]);
+        String targetDsn = normalizeDsn(args[1]);
 
-        runAllocationSelfTest(backups);
-
-        if (ALLOCATION_SELF_TEST_ONLY) {
-            log.info("ALLOCATION_SELF_TEST_ONLY is true. Exiting before backup jobs.");
-            System.exit(0);
+        try {
+            validateDsn(sourceDsn, "sourceDsn");
+            validateDsn(targetDsn, "targetDsn");
+        } catch (Exception ex) {
+            log.error("DSN validation failed: " + ex.getMessage(), ex);
+            System.exit(8);
         }
 
-        int successCount = 0;
-        int failCount = 0;
-
-        for (int i = 0; i < backups.size(); i++) {
-            String dsn = backups.get(i);
-
-            log.info("-------------------------------------------------------");
-            log.info("Job " + (i + 1) + " of " + backups.size());
-            log.info("-------------------------------------------------------");
-
-            boolean ok = runBackup(dsn);
-
-            if (ok) {
-                successCount++;
-            } else {
-                failCount++;
-            }
-        }
-
-        log.info("=======================================================");
-        log.info("  Summary: " + successCount + " succeeded, " + failCount + " failed");
-        log.info("=======================================================");
-
-        System.exit(failCount > 0 ? 12 : 0);
+        boolean ok = copyDatasetUsingDynalloc(sourceDsn, targetDsn);
+        System.exit(ok ? 0 : 12);
     }
 
     private static void initLog4j() {
@@ -109,184 +56,61 @@ public final class DatasetBackup {
         }
     }
 
-    private static BackupConfig loadConfig(String configPath) {
-        Path externalPath = Paths.get(configPath);
-
-        if (Files.exists(externalPath)) {
-            log.info("Loading config from file: " + externalPath.toAbsolutePath());
-
-            try (InputStream in = Files.newInputStream(externalPath)) {
-                return parseYaml(in, configPath);
-            } catch (Exception ex) {
-                log.error("Failed to read config file: " + configPath, ex);
-                System.exit(8);
-            }
-        }
-
-        log.error("Config file not found: " + configPath);
-        log.error("Usage: java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup [config.yaml]");
-        System.exit(8);
-
-        return null;
-    }
-
-    private static BackupConfig parseYaml(InputStream in, String source) {
-        LoaderOptions options = new LoaderOptions();
-        Yaml yaml = new Yaml(new Constructor(BackupConfig.class, options));
-        BackupConfig config = yaml.load(in);
-
-        if (config == null) {
-            throw new IllegalStateException("Empty or invalid YAML: " + source);
-        }
-
-        return config;
-    }
-
-    private static void runAllocationSelfTest(List<String> backups) {
-        log.info("=======================================================");
-        log.info("  Allocation Self-Test");
-        log.info("=======================================================");
-
-        /*
-         * Test 1:
-         * Fixed short DSN using the new backup naming pattern.
-         */
-        testAllocateAndDelete("BDX53.MEF.D260518.T999999");
-
-        /*
-         * Test 2:
-         * Generated target DSN based on the first source DSN in config.yaml.
-         *
-         * Example:
-         * Source: BDX53.QW.FREESPCE.MEF
-         * Target: BDX53.MEF.D260518.Txxxxxx
-         */
-        if (backups != null && !backups.isEmpty()) {
-            try {
-                String firstSourceDsn = normalizeDsn(backups.get(0));
-                String generatedTargetDsn = buildBackupDsn(firstSourceDsn);
-                testAllocateAndDelete(generatedTargetDsn);
-            } catch (Exception ex) {
-                log.error("Allocation self-test failed while building generated target DSN", ex);
-            }
-        }
-
-        log.info("=======================================================");
-        log.info("  Allocation Self-Test Completed");
-        log.info("=======================================================");
-    }
-
-    private static boolean testAllocateAndDelete(String testDsn) {
-        String ddName = null;
-
-        log.info("Testing allocation for DSN: " + testDsn);
-
-        try {
-            validateDsn(testDsn, "testDsn");
-
-            ddName = ZFile.allocDummyDDName();
-
-            ZFile.bpxwdyn(
-                    "alloc fi(" + ddName + ") "
-                            + "da('" + testDsn + "') "
-                            + "new catalog msg(2) "
-                            + "recfm(VBA) "
-                            + "lrecl(" + QUICKREF_LRECL + ") "
-                            + "cyl space(5,5) "
-                            + "unit(SYSDA)");
-
-            log.info("Allocation self-test succeeded: " + testDsn);
-
-            ZFile.bpxwdyn("free fi(" + ddName + ") delete msg(2)");
-            ddName = null;
-
-            log.info("Allocation self-test dataset deleted: " + testDsn);
-
-            return true;
-
-        } catch (Exception ex) {
-            log.error("Allocation self-test failed: " + testDsn, ex);
-            return false;
-
-        } finally {
-            freeDdQuietly(ddName);
-        }
-    }
-
-    private static boolean runBackup(String rawSourceDsn) {
-        String sourceDsn = normalizeDsn(rawSourceDsn);
-        String targetDsn;
-
-        try {
-            validateDsn(sourceDsn, "sourceDsn");
-            targetDsn = buildBackupDsn(sourceDsn);
-            validateDsn(targetDsn, "targetDsn");
-        } catch (Exception ex) {
-            log.error("Validation failed for DSN '" + rawSourceDsn + "': " + ex.getMessage());
-            return false;
-        }
-
-        log.info("Starting backup: " + sourceDsn + " -> " + targetDsn);
-
+    private static boolean copyDatasetUsingDynalloc(String sourceDsn, String targetDsn) {
+        String sourceDd = null;
         String targetDd = null;
-        boolean targetAllocated = false;
 
         ZFile input = null;
         ZFile output = null;
 
         try {
-            /*
-             * Step 1:
-             * Allocate target first.
-             * Do not open source before target allocation.
-             */
+            log.info("=======================================================");
+            log.info("  Dynalloc Dataset Copy");
+            log.info("=======================================================");
+            log.info("Source DSN: " + sourceDsn);
+            log.info("Target DSN: " + targetDsn);
+
+            sourceDd = ZFile.allocDummyDDName();
             targetDd = ZFile.allocDummyDDName();
 
+            log.info("Allocated dummy DD names: source=" + sourceDd + ", target=" + targetDd);
+
+            /*
+             * Same basic approach as IBM DynallocCopyDataset sample:
+             * - allocate source as SHR
+             * - allocate target NEW/CATALOG LIKE(source)
+             * - open both by DD name and copy in record mode
+             *
+             * We use quoted DSN to avoid prefixing/qualification surprises.
+             */
+            log.info("BPXWDYN allocate source...");
+            ZFile.bpxwdyn(
+                    "alloc fi(" + sourceDd + ") "
+                            + "da('" + sourceDsn + "') "
+                            + "shr reuse msg(2)");
+            log.info("Source allocated successfully.");
+
+            log.info("BPXWDYN allocate target using LIKE(source)...");
             ZFile.bpxwdyn(
                     "alloc fi(" + targetDd + ") "
                             + "da('" + targetDsn + "') "
-                            + "new catalog msg(2) "
-                            + "recfm(VBA) "
-                            + "lrecl(" + QUICKREF_LRECL + ") "
-                            + "cyl space(5,5) "
-                            + "unit(SYSDA)");
+                            + "like('" + sourceDsn + "') "
+                            + "reuse new catalog msg(2)");
+            log.info("Target allocated successfully.");
 
-            targetAllocated = true;
-            log.debug("Allocated target dataset: " + targetDsn);
-
-            /*
-             * Step 2:
-             * Open source after target allocation.
-             */
-            input = new ZFile("//'" + sourceDsn + "'", "rb,type=record,noseek");
-            log.debug("Opened source dataset: " + sourceDsn);
-
-            if (input.getDsorg() != ZFile.DSORG_PS) {
-                throw new IllegalStateException(
-                        "Only PS sequential datasets are supported. Source DSN=" + sourceDsn);
-            }
-
-            int sourceLrecl = input.getLrecl();
-
-            if (sourceLrecl <= 0) {
-                throw new IllegalStateException(
-                        "Invalid LRECL from source dataset. Source DSN=" + sourceDsn
-                                + ", LRECL=" + sourceLrecl);
-            }
-
-            if (sourceLrecl != QUICKREF_LRECL) {
-                log.warn("Source LRECL is " + sourceLrecl
-                        + ", expected QuickRef LRECL=" + QUICKREF_LRECL
-                        + ". Source DSN=" + sourceDsn);
-            }
-
-            /*
-             * Step 3:
-             * Open target and copy records.
-             */
+            input = new ZFile("//DD:" + sourceDd, "rb,type=record,noseek");
             output = new ZFile("//DD:" + targetDd, "wb,type=record,noseek");
 
-            byte[] buffer = new byte[sourceLrecl];
+            int lrecl = input.getLrecl();
+
+            if (lrecl <= 0) {
+                throw new IllegalStateException("Invalid source LRECL: " + lrecl);
+            }
+
+            log.info("Source LRECL: " + lrecl);
+            log.info("Source DSORG: " + input.getDsorg());
+
+            byte[] buffer = new byte[lrecl];
             long recordCount = 0;
             int bytesRead;
 
@@ -301,20 +125,16 @@ public final class DatasetBackup {
             input.close();
             input = null;
 
-            log.info("Backup completed successfully.");
-            log.info("  Source DSN  : " + sourceDsn);
-            log.info("  Target DSN  : " + targetDsn);
-            log.info("  Records     : " + recordCount);
-            log.info("  Source LRECL: " + sourceLrecl);
-            log.info("  Target LRECL: " + QUICKREF_LRECL);
-            log.info("  Target RECFM: VBA");
+            log.info("Copy completed successfully.");
+            log.info("Records copied: " + recordCount);
+            log.info("Target DSN: " + targetDsn);
 
             return true;
 
         } catch (Exception ex) {
-            log.error("Backup failed for source DSN: " + sourceDsn, ex);
-            log.error("  Source DSN : " + sourceDsn);
-            log.error("  Target DSN : " + targetDsn);
+            log.error("Dynalloc dataset copy failed.", ex);
+            log.error("Source DSN: " + sourceDsn);
+            log.error("Target DSN: " + targetDsn);
 
             closeQuietly(output);
             output = null;
@@ -322,63 +142,20 @@ public final class DatasetBackup {
             closeQuietly(input);
             input = null;
 
-            if (targetAllocated) {
-                deleteDatasetQuietly(targetDsn);
-            }
+            /*
+             * If target allocation partially succeeded, this may delete it.
+             * If it did not exist, delete will simply log a warning.
+             */
+            deleteDatasetQuietly(targetDsn);
 
             return false;
 
         } finally {
             closeQuietly(output);
             closeQuietly(input);
+            freeDdQuietly(sourceDd);
             freeDdQuietly(targetDd);
         }
-    }
-
-    private static String buildBackupDsn(String sourceDsn) {
-        LocalDateTime now = LocalDateTime.now();
-
-        String dateQualifier = DATE_QUALIFIER_FORMAT.format(now);
-        String timeQualifier = TIME_QUALIFIER_FORMAT.format(now);
-
-        String[] qualifiers = sourceDsn.split("\\.");
-
-        if (qualifiers.length < 2) {
-            throw new IllegalArgumentException(
-                    "Source DSN must have at least 2 qualifiers to build backup DSN. Source DSN=" + sourceDsn);
-        }
-
-        /*
-         * Current backup DSN rule:
-         *
-         * Source:
-         * BDX53.QW.FREESPCE.MEF
-         *
-         * Target:
-         * BDX53.MEF.D260518.Txxxxxx
-         *
-         * The target keeps:
-         * - first qualifier: BDX53
-         * - last qualifier: MEF / MF2 / MF6
-         * - date/time qualifiers
-         */
-        String firstQualifier = qualifiers[0];
-        String lastQualifier = qualifiers[qualifiers.length - 1];
-
-        String targetDsn = firstQualifier
-                + "."
-                + lastQualifier
-                + "."
-                + dateQualifier
-                + "."
-                + timeQualifier;
-
-        if (targetDsn.length() > 44) {
-            throw new IllegalArgumentException(
-                    "Generated target DSN exceeds 44 characters. Target DSN=" + targetDsn);
-        }
-
-        return targetDsn;
     }
 
     private static String normalizeDsn(String dsn) {
@@ -470,7 +247,7 @@ public final class DatasetBackup {
     private static void freeDdQuietly(String ddName) {
         if (ddName != null && !ddName.isEmpty()) {
             try {
-                ZFile.bpxwdyn("free fi(" + ddName + ") msg(wtp)");
+                ZFile.bpxwdyn("free fi(" + ddName + ") msg(2)");
             } catch (Exception ex) {
                 log.warn("Failed to free DD name: " + ddName, ex);
             }
@@ -488,17 +265,19 @@ public final class DatasetBackup {
             deleteDd = ZFile.allocDummyDDName();
 
             ZFile.bpxwdyn(
-                    "alloc fi(" + deleteDd + ") da('" + dsn + "') old msg(2)");
+                    "alloc fi(" + deleteDd + ") "
+                            + "da('" + dsn + "') "
+                            + "old msg(2)");
 
             ZFile.bpxwdyn(
                     "free fi(" + deleteDd + ") delete msg(2)");
 
             deleteDd = null;
 
-            log.debug("Deleted partial backup dataset: " + dsn);
+            log.debug("Deleted target dataset after failure: " + dsn);
 
         } catch (Exception ex) {
-            log.warn("Failed to delete partial backup dataset: " + dsn, ex);
+            log.warn("Failed to delete target dataset after failure: " + dsn, ex);
         } finally {
             freeDdQuietly(deleteDd);
         }
