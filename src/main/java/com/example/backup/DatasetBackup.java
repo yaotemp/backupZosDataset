@@ -191,13 +191,13 @@ public final class DatasetBackup {
                     "alloc fi(" + targetDd + ") "
                             + "da('" + targetDsn + "') "
                             + "new catalog msg(2) "
-                            + "dsorg(ps) "
-                            + "recfm(v b a) "
+                            + "dsorg(PS) "
+                            + "recfm(VBA) "
                             + "lrecl(" + QUICKREF_LRECL + ") "
                             + "blksize(" + QUICKREF_BLKSIZE + ") "
-                            + "cylinders space(5,5) "
-                            + "release "
-                            + "unit(sysda)");
+                            + "space(5,5) cyl "
+                            + "rlse "
+                            + "unit(SYSDA)");
 
             targetAllocated = true;
             log.debug("Allocated target dataset: " + targetDsn);
