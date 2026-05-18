@@ -126,9 +126,7 @@ public final class DatasetBackup {
 
         try {
             validateDsn(sourceDsn, "sourceDsn");
-
             targetDsn = buildBackupDsn(sourceDsn);
-
             validateDsn(targetDsn, "targetDsn");
         } catch (Exception ex) {
             log.error("Validation failed for DSN '" + rawSourceDsn + "': " + ex.getMessage());
@@ -144,8 +142,13 @@ public final class DatasetBackup {
         ZFile output = null;
 
         try {
+            /*
+             * Step 1:
+             * Open source only to validate it and get dataset attributes.
+             * Then close it before BPXWDYN LIKE allocation.
+             */
             input = new ZFile("//'" + sourceDsn + "'", "rb,type=record,noseek");
-            log.debug("Opened source dataset: " + sourceDsn);
+            log.debug("Opened source dataset for attribute check: " + sourceDsn);
 
             if (input.getDsorg() != ZFile.DSORG_PS) {
                 throw new IllegalStateException(
@@ -161,6 +164,14 @@ public final class DatasetBackup {
 
             log.debug("Source LRECL=" + lrecl);
 
+            input.close();
+            input = null;
+
+            /*
+             * Step 2:
+             * Allocate target after source is closed.
+             * This avoids FILE IN USE caused by LIKE(sourceDsn) while source is open.
+             */
             targetDd = ZFile.allocDummyDDName();
 
             ZFile.bpxwdyn(
@@ -170,6 +181,11 @@ public final class DatasetBackup {
             targetAllocated = true;
             log.debug("Allocated target dataset: " + targetDsn);
 
+            /*
+             * Step 3:
+             * Reopen source and copy records.
+             */
+            input = new ZFile("//'" + sourceDsn + "'", "rb,type=record,noseek");
             output = new ZFile("//DD:" + targetDd, "wb,type=record,noseek");
 
             byte[] buffer = new byte[lrecl];
