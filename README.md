@@ -83,13 +83,13 @@ Run from the directory containing `config.yaml` and `log4j.properties`:
 ### Using the default config (config.yaml in current directory)
 
 ```bash
-java -jar dataset-backup-1.0.0.jar
+java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup
 ```
 
 ### Using a custom config file path
 
 ```bash
-java -jar dataset-backup-1.0.0.jar /path/to/my-config.yaml
+java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup /path/to/my-config.yaml
 ```
 
 > **Encoding:** The utility forces `System.out`/`System.err` to UTF-8 at startup, so it works correctly on z/OS USS terminals without extra JVM flags.
