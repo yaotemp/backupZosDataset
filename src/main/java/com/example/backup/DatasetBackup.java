@@ -19,20 +19,19 @@ public final class DatasetBackup {
 
     private static final Logger log = Logger.getLogger(DatasetBackup.class);
 
-    private static final DateTimeFormatter DATE_QUALIFIER_FORMAT =
-            DateTimeFormatter.ofPattern("'D'yyMMdd");
+    private static final DateTimeFormatter DATE_QUALIFIER_FORMAT = DateTimeFormatter.ofPattern("'D'yyMMdd");
 
-    private static final DateTimeFormatter TIME_QUALIFIER_FORMAT =
-            DateTimeFormatter.ofPattern("'T'HHmmss");
+    private static final DateTimeFormatter TIME_QUALIFIER_FORMAT = DateTimeFormatter.ofPattern("'T'HHmmss");
 
     private static final String DEFAULT_CONFIG = "config.yaml";
     private static final String DEFAULT_LOG4J_CONFIG = "log4j.properties";
+
+    private static final String BACKUP_SECOND_QUALIFIER = "BKUP";
 
     private DatasetBackup() {
     }
 
     public static void main(String[] args) {
-        // Load log4j config from external file (same directory as the JAR)
         initLog4j();
 
         String configPath = (args.length >= 1) ? args[0] : DEFAULT_CONFIG;
@@ -55,11 +54,13 @@ public final class DatasetBackup {
 
         for (int i = 0; i < backups.size(); i++) {
             String dsn = backups.get(i);
+
             log.info("-------------------------------------------------------");
             log.info("Job " + (i + 1) + " of " + backups.size());
             log.info("-------------------------------------------------------");
 
             boolean ok = runBackup(dsn);
+
             if (ok) {
                 successCount++;
             } else {
@@ -74,30 +75,24 @@ public final class DatasetBackup {
         System.exit(failCount > 0 ? 12 : 0);
     }
 
-    // ---------------------------------------------------------------
-    //  Log4j initialization
-    // ---------------------------------------------------------------
-
     private static void initLog4j() {
         Path log4jPath = Paths.get(DEFAULT_LOG4J_CONFIG);
+
         if (Files.exists(log4jPath)) {
             PropertyConfigurator.configure(log4jPath.toAbsolutePath().toString());
         } else {
-            // Minimal fallback: console only
             org.apache.log4j.BasicConfigurator.configure();
             log.warn("log4j.properties not found at " + log4jPath.toAbsolutePath()
                     + ", using basic console logging");
         }
     }
 
-    // ---------------------------------------------------------------
-    //  Config loading
-    // ---------------------------------------------------------------
-
     private static BackupConfig loadConfig(String configPath) {
         Path externalPath = Paths.get(configPath);
+
         if (Files.exists(externalPath)) {
             log.info("Loading config from file: " + externalPath.toAbsolutePath());
+
             try (InputStream in = Files.newInputStream(externalPath)) {
                 return parseYaml(in, configPath);
             } catch (Exception ex) {
@@ -107,10 +102,10 @@ public final class DatasetBackup {
         }
 
         log.error("Config file not found: " + configPath);
-        log.error("Usage: java -jar dataset-backup.jar [config.yaml]");
+        log.error("Usage: java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup [config.yaml]");
         System.exit(8);
 
-        return null; // unreachable
+        return null;
     }
 
     private static BackupConfig parseYaml(InputStream in, String source) {
@@ -125,17 +120,15 @@ public final class DatasetBackup {
         return config;
     }
 
-    // ---------------------------------------------------------------
-    //  Single backup execution
-    // ---------------------------------------------------------------
-
     private static boolean runBackup(String rawSourceDsn) {
         String sourceDsn = normalizeDsn(rawSourceDsn);
-        String targetDsn = null;
+        String targetDsn;
 
         try {
             validateDsn(sourceDsn, "sourceDsn");
-            targetDsn = buildTimestampBackupDsn(sourceDsn);
+
+            targetDsn = buildBackupDsn(sourceDsn);
+
             validateDsn(targetDsn, "targetDsn");
         } catch (Exception ex) {
             log.error("Validation failed for DSN '" + rawSourceDsn + "': " + ex.getMessage());
@@ -144,48 +137,38 @@ public final class DatasetBackup {
 
         log.info("Starting backup: " + sourceDsn + " -> " + targetDsn);
 
-        String sourceDd = null;
         String targetDd = null;
+        boolean targetAllocated = false;
 
         ZFile input = null;
         ZFile output = null;
 
         try {
-            sourceDd = ZFile.allocDummyDDName();
-            targetDd = ZFile.allocDummyDDName();
-
-            if (log.isDebugEnabled()) {
-                log.debug("Allocated DD names: source=" + sourceDd + ", target=" + targetDd);
-            }
-
-            ZFile.bpxwdyn(
-                    "alloc fi(" + sourceDd + ") da('" + sourceDsn + "') shr reuse msg(wtp)"
-            );
-            log.debug("Allocated source dataset: " + sourceDsn);
-
-            ZFile.bpxwdyn(
-                    "alloc fi(" + targetDd + ") da('" + targetDsn + "') new catalog msg(wtp) " +
-                    "like('" + sourceDsn + "')"
-            );
-            log.debug("Allocated target dataset: " + targetDsn);
-
-            input = new ZFile("//DD:" + sourceDd, "rb,type=record,noseek");
+            input = new ZFile("//'" + sourceDsn + "'", "rb,type=record,noseek");
+            log.debug("Opened source dataset: " + sourceDsn);
 
             if (input.getDsorg() != ZFile.DSORG_PS) {
                 throw new IllegalStateException(
-                        "Only PS sequential datasets are supported. Source DSN=" + sourceDsn
-                );
+                        "Only PS sequential datasets are supported. Source DSN=" + sourceDsn);
             }
 
             int lrecl = input.getLrecl();
 
             if (lrecl <= 0) {
                 throw new IllegalStateException(
-                        "Invalid LRECL from source dataset. Source DSN=" + sourceDsn + ", LRECL=" + lrecl
-                );
+                        "Invalid LRECL from source dataset. Source DSN=" + sourceDsn + ", LRECL=" + lrecl);
             }
 
             log.debug("Source LRECL=" + lrecl);
+
+            targetDd = ZFile.allocDummyDDName();
+
+            ZFile.bpxwdyn(
+                    "alloc fi(" + targetDd + ") da('" + targetDsn + "') new catalog msg(2) " +
+                            "like('" + sourceDsn + "')");
+
+            targetAllocated = true;
+            log.debug("Allocated target dataset: " + targetDsn);
 
             output = new ZFile("//DD:" + targetDd, "wb,type=record,noseek");
 
@@ -217,41 +200,59 @@ public final class DatasetBackup {
             log.error("  Source DSN : " + sourceDsn);
             log.error("  Target DSN : " + targetDsn);
 
-            closeQuietly(input);
             closeQuietly(output);
+            output = null;
 
-            freeDdQuietly(sourceDd);
-            freeDdQuietly(targetDd);
+            closeQuietly(input);
+            input = null;
 
-            deleteDatasetQuietly(targetDsn);
+            if (targetAllocated) {
+                deleteDatasetQuietly(targetDsn);
+            }
 
             return false;
 
         } finally {
-            closeQuietly(input);
             closeQuietly(output);
-
-            freeDdQuietly(sourceDd);
+            closeQuietly(input);
             freeDdQuietly(targetDd);
         }
     }
 
-    // ---------------------------------------------------------------
-    //  DSN helpers
-    // ---------------------------------------------------------------
-
-    private static String buildTimestampBackupDsn(String sourceDsn) {
+    private static String buildBackupDsn(String sourceDsn) {
         LocalDateTime now = LocalDateTime.now();
 
         String dateQualifier = DATE_QUALIFIER_FORMAT.format(now);
         String timeQualifier = TIME_QUALIFIER_FORMAT.format(now);
 
-        String targetDsn = sourceDsn + "." + dateQualifier + "." + timeQualifier;
+        String[] qualifiers = sourceDsn.split("\\.");
+
+        if (qualifiers.length < 3) {
+            throw new IllegalArgumentException(
+                    "Source DSN must have at least 3 qualifiers to build backup DSN. Source DSN=" + sourceDsn);
+        }
+
+        StringBuilder builder = new StringBuilder();
+
+        builder.append(qualifiers[0]);
+        builder.append(".");
+        builder.append(BACKUP_SECOND_QUALIFIER);
+
+        for (int i = 2; i < qualifiers.length; i++) {
+            builder.append(".");
+            builder.append(qualifiers[i]);
+        }
+
+        builder.append(".");
+        builder.append(dateQualifier);
+        builder.append(".");
+        builder.append(timeQualifier);
+
+        String targetDsn = builder.toString();
 
         if (targetDsn.length() > 44) {
             throw new IllegalArgumentException(
-                    "Generated target DSN exceeds 44 characters. Target DSN=" + targetDsn
-            );
+                    "Generated target DSN exceeds 44 characters. Target DSN=" + targetDsn);
         }
 
         return targetDsn;
@@ -286,8 +287,7 @@ public final class DatasetBackup {
 
         if (dsn.length() > 44) {
             throw new IllegalArgumentException(
-                    fieldName + " exceeds 44 characters. DSN=" + dsn
-            );
+                    fieldName + " exceeds 44 characters. DSN=" + dsn);
         }
 
         String[] qualifiers = dsn.split("\\.");
@@ -300,22 +300,19 @@ public final class DatasetBackup {
     private static void validateQualifier(String qualifier, String fieldName, String fullDsn) {
         if (qualifier == null || qualifier.isEmpty()) {
             throw new IllegalArgumentException(
-                    fieldName + " contains empty qualifier. DSN=" + fullDsn
-            );
+                    fieldName + " contains empty qualifier. DSN=" + fullDsn);
         }
 
         if (qualifier.length() > 8) {
             throw new IllegalArgumentException(
-                    fieldName + " qualifier exceeds 8 characters. Qualifier=" + qualifier + ", DSN=" + fullDsn
-            );
+                    fieldName + " qualifier exceeds 8 characters. Qualifier=" + qualifier + ", DSN=" + fullDsn);
         }
 
         char first = qualifier.charAt(0);
 
         if (!isValidFirstDsnCharacter(first)) {
             throw new IllegalArgumentException(
-                    fieldName + " qualifier has invalid first character. Qualifier=" + qualifier + ", DSN=" + fullDsn
-            );
+                    fieldName + " qualifier has invalid first character. Qualifier=" + qualifier + ", DSN=" + fullDsn);
         }
 
         for (int i = 1; i < qualifier.length(); i++) {
@@ -324,8 +321,7 @@ public final class DatasetBackup {
             if (!isValidDsnCharacter(ch)) {
                 throw new IllegalArgumentException(
                         fieldName + " qualifier contains invalid character '" + ch + "'. " +
-                        "Qualifier=" + qualifier + ", DSN=" + fullDsn
-                );
+                                "Qualifier=" + qualifier + ", DSN=" + fullDsn);
             }
         }
     }
@@ -337,10 +333,6 @@ public final class DatasetBackup {
     private static boolean isValidDsnCharacter(char ch) {
         return Character.isLetterOrDigit(ch) || ch == '@' || ch == '#' || ch == '$';
     }
-
-    // ---------------------------------------------------------------
-    //  Cleanup helpers
-    // ---------------------------------------------------------------
 
     private static void closeQuietly(ZFile file) {
         if (file != null) {
@@ -363,18 +355,22 @@ public final class DatasetBackup {
     }
 
     private static void deleteDatasetQuietly(String dsn) {
+        if (dsn == null || dsn.trim().isEmpty()) {
+            return;
+        }
+
         String deleteDd = null;
 
         try {
             deleteDd = ZFile.allocDummyDDName();
 
             ZFile.bpxwdyn(
-                    "alloc fi(" + deleteDd + ") da('" + dsn + "') old reuse msg(wtp)"
-            );
+                    "alloc fi(" + deleteDd + ") da('" + dsn + "') old msg(2)");
 
             ZFile.bpxwdyn(
-                    "free fi(" + deleteDd + ") delete msg(wtp)"
-            );
+                    "free fi(" + deleteDd + ") delete msg(2)");
+
+            deleteDd = null;
 
             log.debug("Deleted partial backup dataset: " + dsn);
 
