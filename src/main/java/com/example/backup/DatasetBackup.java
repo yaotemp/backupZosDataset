@@ -26,24 +26,20 @@ public final class DatasetBackup {
     private static final String DEFAULT_CONFIG = "config.yaml";
     private static final String DEFAULT_LOG4J_CONFIG = "log4j.properties";
 
-    private static final String BACKUP_SECOND_QUALIFIER = "BKUP";
-
     /*
      * QuickRef report output attributes from JCL:
      *
      * DCB=(RECFM=VBA,LRECL=450,BLKSIZE=6000),
      * SPACE=(CYL,(5,5),RLSE),UNIT=SYSDA
      *
-     * In BPXWDYN, we start with the minimal required attributes:
+     * For BPXWDYN, we use minimal required attributes first:
      * RECFM=VBA, LRECL=450, CYL SPACE(5,5), UNIT=SYSDA.
      */
     private static final int QUICKREF_LRECL = 450;
 
     /*
-     * Set this to true if you only want to test allocation and exit before backup
-     * jobs.
-     * Set this to false to run allocation tests first, then continue with backup
-     * jobs.
+     * Set to true if you only want to run allocation tests and exit.
+     * Set to false to run allocation tests first, then continue with backup jobs.
      */
     private static final boolean ALLOCATION_SELF_TEST_ONLY = false;
 
@@ -151,8 +147,20 @@ public final class DatasetBackup {
         log.info("  Allocation Self-Test");
         log.info("=======================================================");
 
-        testAllocateAndDelete("BDX53.BKUP.TEST1");
+        /*
+         * Test 1:
+         * Fixed short DSN using the new backup naming pattern.
+         */
+        testAllocateAndDelete("BDX53.MEF.D260518.T999999");
 
+        /*
+         * Test 2:
+         * Generated target DSN based on the first source DSN in config.yaml.
+         *
+         * Example:
+         * Source: BDX53.QW.FREESPCE.MEF
+         * Target: BDX53.MEF.D260518.Txxxxxx
+         */
         if (backups != null && !backups.isEmpty()) {
             try {
                 String firstSourceDsn = normalizeDsn(backups.get(0));
@@ -294,9 +302,9 @@ public final class DatasetBackup {
             input = null;
 
             log.info("Backup completed successfully.");
-            log.info("  Source DSN : " + sourceDsn);
-            log.info("  Target DSN : " + targetDsn);
-            log.info("  Records    : " + recordCount);
+            log.info("  Source DSN  : " + sourceDsn);
+            log.info("  Target DSN  : " + targetDsn);
+            log.info("  Records     : " + recordCount);
             log.info("  Source LRECL: " + sourceLrecl);
             log.info("  Target LRECL: " + QUICKREF_LRECL);
             log.info("  Target RECFM: VBA");
@@ -335,9 +343,9 @@ public final class DatasetBackup {
 
         String[] qualifiers = sourceDsn.split("\\.");
 
-        if (qualifiers.length < 3) {
+        if (qualifiers.length < 2) {
             throw new IllegalArgumentException(
-                    "Source DSN must have at least 3 qualifiers to build backup DSN. Source DSN=" + sourceDsn);
+                    "Source DSN must have at least 2 qualifiers to build backup DSN. Source DSN=" + sourceDsn);
         }
 
         /*
@@ -347,25 +355,23 @@ public final class DatasetBackup {
          * BDX53.QW.FREESPCE.MEF
          *
          * Target:
-         * BDX53.BKUP.FREESPCE.MEF.D260518.Txxxxxx
+         * BDX53.MEF.D260518.Txxxxxx
+         *
+         * The target keeps:
+         * - first qualifier: BDX53
+         * - last qualifier: MEF / MF2 / MF6
+         * - date/time qualifiers
          */
-        StringBuilder builder = new StringBuilder();
+        String firstQualifier = qualifiers[0];
+        String lastQualifier = qualifiers[qualifiers.length - 1];
 
-        builder.append(qualifiers[0]);
-        builder.append(".");
-        builder.append(BACKUP_SECOND_QUALIFIER);
-
-        for (int i = 2; i < qualifiers.length; i++) {
-            builder.append(".");
-            builder.append(qualifiers[i]);
-        }
-
-        builder.append(".");
-        builder.append(dateQualifier);
-        builder.append(".");
-        builder.append(timeQualifier);
-
-        String targetDsn = builder.toString();
+        String targetDsn = firstQualifier
+                + "."
+                + lastQualifier
+                + "."
+                + dateQualifier
+                + "."
+                + timeQualifier;
 
         if (targetDsn.length() > 44) {
             throw new IllegalArgumentException(
