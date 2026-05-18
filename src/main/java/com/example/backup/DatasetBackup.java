@@ -33,9 +33,19 @@ public final class DatasetBackup {
      *
      * DCB=(RECFM=VBA,LRECL=450,BLKSIZE=6000),
      * SPACE=(CYL,(5,5),RLSE),UNIT=SYSDA
+     *
+     * In BPXWDYN, we start with the minimal required attributes:
+     * RECFM=VBA, LRECL=450, CYL SPACE(5,5), UNIT=SYSDA.
      */
     private static final int QUICKREF_LRECL = 450;
-    private static final int QUICKREF_BLKSIZE = 6000;
+
+    /*
+     * Set this to true if you only want to test allocation and exit before backup
+     * jobs.
+     * Set this to false to run allocation tests first, then continue with backup
+     * jobs.
+     */
+    private static final boolean ALLOCATION_SELF_TEST_ONLY = false;
 
     private DatasetBackup() {
     }
@@ -57,6 +67,13 @@ public final class DatasetBackup {
         log.info("  Dataset Backup - " + backups.size() + " job(s) loaded");
         log.info("  Config file: " + configPath);
         log.info("=======================================================");
+
+        runAllocationSelfTest(backups);
+
+        if (ALLOCATION_SELF_TEST_ONLY) {
+            log.info("ALLOCATION_SELF_TEST_ONLY is true. Exiting before backup jobs.");
+            System.exit(0);
+        }
 
         int successCount = 0;
         int failCount = 0;
@@ -129,6 +146,65 @@ public final class DatasetBackup {
         return config;
     }
 
+    private static void runAllocationSelfTest(List<String> backups) {
+        log.info("=======================================================");
+        log.info("  Allocation Self-Test");
+        log.info("=======================================================");
+
+        testAllocateAndDelete("BDX53.BKUP.TEST1");
+
+        if (backups != null && !backups.isEmpty()) {
+            try {
+                String firstSourceDsn = normalizeDsn(backups.get(0));
+                String generatedTargetDsn = buildBackupDsn(firstSourceDsn);
+                testAllocateAndDelete(generatedTargetDsn);
+            } catch (Exception ex) {
+                log.error("Allocation self-test failed while building generated target DSN", ex);
+            }
+        }
+
+        log.info("=======================================================");
+        log.info("  Allocation Self-Test Completed");
+        log.info("=======================================================");
+    }
+
+    private static boolean testAllocateAndDelete(String testDsn) {
+        String ddName = null;
+
+        log.info("Testing allocation for DSN: " + testDsn);
+
+        try {
+            validateDsn(testDsn, "testDsn");
+
+            ddName = ZFile.allocDummyDDName();
+
+            ZFile.bpxwdyn(
+                    "alloc fi(" + ddName + ") "
+                            + "da('" + testDsn + "') "
+                            + "new catalog msg(2) "
+                            + "recfm(VBA) "
+                            + "lrecl(" + QUICKREF_LRECL + ") "
+                            + "cyl space(5,5) "
+                            + "unit(SYSDA)");
+
+            log.info("Allocation self-test succeeded: " + testDsn);
+
+            ZFile.bpxwdyn("free fi(" + ddName + ") delete msg(2)");
+            ddName = null;
+
+            log.info("Allocation self-test dataset deleted: " + testDsn);
+
+            return true;
+
+        } catch (Exception ex) {
+            log.error("Allocation self-test failed: " + testDsn, ex);
+            return false;
+
+        } finally {
+            freeDdQuietly(ddName);
+        }
+    }
+
     private static boolean runBackup(String rawSourceDsn) {
         String sourceDsn = normalizeDsn(rawSourceDsn);
         String targetDsn;
@@ -163,7 +239,7 @@ public final class DatasetBackup {
                             + "da('" + targetDsn + "') "
                             + "new catalog msg(2) "
                             + "recfm(VBA) "
-                            + "lrecl(450) "
+                            + "lrecl(" + QUICKREF_LRECL + ") "
                             + "cyl space(5,5) "
                             + "unit(SYSDA)");
 
@@ -264,6 +340,15 @@ public final class DatasetBackup {
                     "Source DSN must have at least 3 qualifiers to build backup DSN. Source DSN=" + sourceDsn);
         }
 
+        /*
+         * Current backup DSN rule:
+         *
+         * Source:
+         * BDX53.QW.FREESPCE.MEF
+         *
+         * Target:
+         * BDX53.BKUP.FREESPCE.MEF.D260518.Txxxxxx
+         */
         StringBuilder builder = new StringBuilder();
 
         builder.append(qualifiers[0]);
