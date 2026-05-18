@@ -23,12 +23,11 @@ The utility reads a list of source dataset names from `config.yaml` and creates 
 backupzfile/
 ├── pom.xml
 ├── README.md
-└── src/main/
-    ├── java/com/example/backup/
-    │   ├── DatasetBackup.java      # Main entry point
-    │   └── BackupConfig.java       # YAML config model
-    └── resources/
-        └── config.yaml             # Backup job list
+├── config.yaml                 # Backup job list (external, not bundled in JAR)
+├── log4j.properties            # Log4j config (external, not bundled in JAR)
+└── src/main/java/com/example/backup/
+    ├── DatasetBackup.java      # Main entry point
+    └── BackupConfig.java       # YAML config model
 ```
 
 ## Prerequisites
@@ -39,7 +38,9 @@ backupzfile/
 
 ## Configuration
 
-Edit `src/main/resources/config.yaml` (bundled in the JAR) or provide an external file:
+### config.yaml
+
+Edit `config.yaml` in the same directory as the JAR:
 
 ```yaml
 backups:
@@ -50,64 +51,74 @@ backups:
 
 Each entry is the fully-qualified source dataset name to back up.
 
+### log4j.properties
+
+Logging is configured via `log4j.properties` in the same directory as the JAR. By default it logs to both console and a daily rolling file under `./logs/`. Override the log directory at runtime with `-Dlog.dir=/custom/path`.
+
 ## Build
 
 ```bash
 mvn clean package
 ```
 
-This produces `target/dataset-backup-1.0.0.jar`.
+This produces `target/dataset-backup-1.0.0.jar` (fat JAR with all dependencies bundled).
 
 > **Note:** The `com.ibm.jzos` dependency uses a compile stub from Maven Central (`com.ibm.jzos:ibm.jzos:3.1.3.3`, scope `provided`). It compiles anywhere, but only runs on z/OS where the real JZOS library is provided by the JVM.
 
+## Deployment
+
+Copy these three files to your z/OS deployment directory:
+
+```
+/deploy/
+├── dataset-backup-1.0.0.jar   # from target/
+├── config.yaml                # edit to list your datasets
+└── log4j.properties           # edit to change log settings
+```
+
 ## Usage
 
-On z/OS, the JZOS library is already on the JVM classpath, so you only need:
+Run from the directory containing `config.yaml` and `log4j.properties`:
 
-### Using the bundled config (from classpath)
-
-```bash
-java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup
-```
-
-### Using an external config file
+### Using the default config (config.yaml in current directory)
 
 ```bash
-java -cp dataset-backup-1.0.0.jar com.example.backup.DatasetBackup /path/to/config.yaml
+java -jar dataset-backup-1.0.0.jar
 ```
 
-> **Encoding:** The utility forces `System.out`/`System.err` and logback appenders to UTF-8 at startup, so it works correctly on z/OS USS terminals without extra JVM flags.
+### Using a custom config file path
 
-The utility searches for the config file in this order:
-1. **External file** — the path provided as a command-line argument
-2. **Classpath** — the bundled `config.yaml` inside the JAR
+```bash
+java -jar dataset-backup-1.0.0.jar /path/to/my-config.yaml
+```
+
+> **Encoding:** The utility forces `System.out`/`System.err` to UTF-8 at startup, so it works correctly on z/OS USS terminals without extra JVM flags.
 
 ## Output
 
 ```
 =======================================================
-  Dataset Backup — 3 job(s) loaded
+  Dataset Backup - 3 job(s) loaded
   Config file: config.yaml
 =======================================================
-
 -------------------------------------------------------
 Job 1 of 3
 -------------------------------------------------------
+Starting backup: QREF.REPORT.FILE -> QREF.REPORT.FILE.D260514.T143000
 Backup completed successfully.
   Source DSN : QREF.REPORT.FILE
   Target DSN : QREF.REPORT.FILE.D260514.T143000
   Records    : 1024
   LRECL      : 80
-
 -------------------------------------------------------
 Job 2 of 3
 -------------------------------------------------------
+Starting backup: PROD.DATA.MASTER -> PROD.DATA.MASTER.D260514.T143001
 Backup completed successfully.
   Source DSN : PROD.DATA.MASTER
   Target DSN : PROD.DATA.MASTER.D260514.T143001
   Records    : 5000
   LRECL      : 200
-
 =======================================================
   Summary: 2 succeeded, 0 failed
 =======================================================
@@ -123,7 +134,7 @@ Backup completed successfully.
 
 ## Error Handling
 
-- Each backup job runs independently — a failure in one job does **not** stop the remaining jobs.
+- Each backup job runs independently - a failure in one job does **not** stop the remaining jobs.
 - On failure, the utility attempts to **delete the partially-created backup dataset** to avoid leaving incomplete copies.
 - All DD names are freed in the `finally` block to prevent resource leaks.
 
