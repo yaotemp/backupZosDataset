@@ -1,8 +1,8 @@
 package com.example.backup;
 
 import com.ibm.jzos.ZFile;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.log4j.Logger;
+import org.apache.log4j.PropertyConfigurator;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
 import org.yaml.snakeyaml.constructor.Constructor;
@@ -19,7 +19,7 @@ import java.util.List;
 
 public final class DatasetBackup {
 
-    private static final Logger log = LoggerFactory.getLogger(DatasetBackup.class);
+    private static final Logger log = Logger.getLogger(DatasetBackup.class);
 
     private static final DateTimeFormatter DATE_QUALIFIER_FORMAT =
             DateTimeFormatter.ofPattern("'D'yyMMdd");
@@ -28,6 +28,7 @@ public final class DatasetBackup {
             DateTimeFormatter.ofPattern("'T'HHmmss");
 
     private static final String DEFAULT_CONFIG = "config.yaml";
+    private static final String DEFAULT_LOG4J_CONFIG = "log4j.properties";
 
     private DatasetBackup() {
     }
@@ -38,19 +39,22 @@ public final class DatasetBackup {
         System.setOut(new PrintStream(System.out, true, StandardCharsets.UTF_8));
         System.setErr(new PrintStream(System.err, true, StandardCharsets.UTF_8));
 
+        // Load log4j config from external file (same directory as the JAR)
+        initLog4j();
+
         String configPath = (args.length >= 1) ? args[0] : DEFAULT_CONFIG;
 
         BackupConfig config = loadConfig(configPath);
         List<String> backups = config.getBackups();
 
         if (backups == null || backups.isEmpty()) {
-            log.error("No backup entries found in {}", configPath);
+            log.error("No backup entries found in " + configPath);
             System.exit(8);
         }
 
         log.info("=======================================================");
-        log.info("  Dataset Backup - {} job(s) loaded", backups.size());
-        log.info("  Config file: {}", configPath);
+        log.info("  Dataset Backup - " + backups.size() + " job(s) loaded");
+        log.info("  Config file: " + configPath);
         log.info("=======================================================");
 
         int successCount = 0;
@@ -59,7 +63,7 @@ public final class DatasetBackup {
         for (int i = 0; i < backups.size(); i++) {
             String dsn = backups.get(i);
             log.info("-------------------------------------------------------");
-            log.info("Job {} of {}", i + 1, backups.size());
+            log.info("Job " + (i + 1) + " of " + backups.size());
             log.info("-------------------------------------------------------");
 
             boolean ok = runBackup(dsn);
@@ -71,10 +75,26 @@ public final class DatasetBackup {
         }
 
         log.info("=======================================================");
-        log.info("  Summary: {} succeeded, {} failed", successCount, failCount);
+        log.info("  Summary: " + successCount + " succeeded, " + failCount + " failed");
         log.info("=======================================================");
 
         System.exit(failCount > 0 ? 12 : 0);
+    }
+
+    // ---------------------------------------------------------------
+    //  Log4j initialization
+    // ---------------------------------------------------------------
+
+    private static void initLog4j() {
+        Path log4jPath = Paths.get(DEFAULT_LOG4J_CONFIG);
+        if (Files.exists(log4jPath)) {
+            PropertyConfigurator.configure(log4jPath.toAbsolutePath().toString());
+        } else {
+            // Minimal fallback: console only
+            org.apache.log4j.BasicConfigurator.configure();
+            log.warn("log4j.properties not found at " + log4jPath.toAbsolutePath()
+                    + ", using basic console logging");
+        }
     }
 
     // ---------------------------------------------------------------
@@ -82,31 +102,20 @@ public final class DatasetBackup {
     // ---------------------------------------------------------------
 
     private static BackupConfig loadConfig(String configPath) {
-        // 1) Try external file first
         Path externalPath = Paths.get(configPath);
         if (Files.exists(externalPath)) {
-            log.info("Loading config from file: {}", externalPath.toAbsolutePath());
+            log.info("Loading config from file: " + externalPath.toAbsolutePath());
             try (InputStream in = Files.newInputStream(externalPath)) {
                 return parseYaml(in, configPath);
             } catch (Exception ex) {
-                log.error("Failed to read config file: {}", configPath, ex);
+                log.error("Failed to read config file: " + configPath, ex);
                 System.exit(8);
             }
         }
 
-        // 2) Fall back to classpath resource
-        try (InputStream in = DatasetBackup.class.getClassLoader().getResourceAsStream(configPath)) {
-            if (in == null) {
-                log.error("Config file not found: {}", configPath);
-                log.error("Usage: java -jar dataset-backup.jar [config.yaml]");
-                System.exit(8);
-            }
-            log.info("Loading config from classpath: {}", configPath);
-            return parseYaml(in, configPath);
-        } catch (Exception ex) {
-            log.error("Failed to read config from classpath: {}", configPath, ex);
-            System.exit(8);
-        }
+        log.error("Config file not found: " + configPath);
+        log.error("Usage: java -jar dataset-backup.jar [config.yaml]");
+        System.exit(8);
 
         return null; // unreachable
     }
@@ -136,11 +145,11 @@ public final class DatasetBackup {
             targetDsn = buildTimestampBackupDsn(sourceDsn);
             validateDsn(targetDsn, "targetDsn");
         } catch (Exception ex) {
-            log.error("Validation failed for DSN '{}': {}", rawSourceDsn, ex.getMessage());
+            log.error("Validation failed for DSN '" + rawSourceDsn + "': " + ex.getMessage());
             return false;
         }
 
-        log.info("Starting backup: {} -> {}", sourceDsn, targetDsn);
+        log.info("Starting backup: " + sourceDsn + " -> " + targetDsn);
 
         String sourceDd = null;
         String targetDd = null;
@@ -152,18 +161,20 @@ public final class DatasetBackup {
             sourceDd = ZFile.allocDummyDDName();
             targetDd = ZFile.allocDummyDDName();
 
-            log.debug("Allocated DD names: source={}, target={}", sourceDd, targetDd);
+            if (log.isDebugEnabled()) {
+                log.debug("Allocated DD names: source=" + sourceDd + ", target=" + targetDd);
+            }
 
             ZFile.bpxwdyn(
                     "alloc fi(" + sourceDd + ") da('" + sourceDsn + "') shr reuse msg(wtp)"
             );
-            log.debug("Allocated source dataset: {}", sourceDsn);
+            log.debug("Allocated source dataset: " + sourceDsn);
 
             ZFile.bpxwdyn(
                     "alloc fi(" + targetDd + ") da('" + targetDsn + "') new catalog msg(wtp) " +
                     "like('" + sourceDsn + "')"
             );
-            log.debug("Allocated target dataset: {}", targetDsn);
+            log.debug("Allocated target dataset: " + targetDsn);
 
             input = new ZFile("//DD:" + sourceDd, "rb,type=record,noseek");
 
@@ -181,7 +192,7 @@ public final class DatasetBackup {
                 );
             }
 
-            log.debug("Source LRECL={}", lrecl);
+            log.debug("Source LRECL=" + lrecl);
 
             output = new ZFile("//DD:" + targetDd, "wb,type=record,noseek");
 
@@ -201,17 +212,17 @@ public final class DatasetBackup {
             input = null;
 
             log.info("Backup completed successfully.");
-            log.info("  Source DSN : {}", sourceDsn);
-            log.info("  Target DSN : {}", targetDsn);
-            log.info("  Records    : {}", recordCount);
-            log.info("  LRECL      : {}", lrecl);
+            log.info("  Source DSN : " + sourceDsn);
+            log.info("  Target DSN : " + targetDsn);
+            log.info("  Records    : " + recordCount);
+            log.info("  LRECL      : " + lrecl);
 
             return true;
 
         } catch (Exception ex) {
-            log.error("Backup failed for source DSN: {}", sourceDsn, ex);
-            log.error("  Source DSN : {}", sourceDsn);
-            log.error("  Target DSN : {}", targetDsn);
+            log.error("Backup failed for source DSN: " + sourceDsn, ex);
+            log.error("  Source DSN : " + sourceDsn);
+            log.error("  Target DSN : " + targetDsn);
 
             closeQuietly(input);
             closeQuietly(output);
@@ -353,7 +364,7 @@ public final class DatasetBackup {
             try {
                 ZFile.bpxwdyn("free fi(" + ddName + ") msg(wtp)");
             } catch (Exception ex) {
-                log.warn("Failed to free DD name: {}", ddName, ex);
+                log.warn("Failed to free DD name: " + ddName, ex);
             }
         }
     }
@@ -372,10 +383,10 @@ public final class DatasetBackup {
                     "free fi(" + deleteDd + ") delete msg(wtp)"
             );
 
-            log.debug("Deleted partial backup dataset: {}", dsn);
+            log.debug("Deleted partial backup dataset: " + dsn);
 
         } catch (Exception ex) {
-            log.warn("Failed to delete partial backup dataset: {}", dsn, ex);
+            log.warn("Failed to delete partial backup dataset: " + dsn, ex);
         } finally {
             freeDdQuietly(deleteDd);
         }
