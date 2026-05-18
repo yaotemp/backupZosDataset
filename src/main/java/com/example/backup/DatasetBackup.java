@@ -28,6 +28,15 @@ public final class DatasetBackup {
 
     private static final String BACKUP_SECOND_QUALIFIER = "BKUP";
 
+    /*
+     * QuickRef report output attributes from JCL:
+     *
+     * DCB=(RECFM=VBA,LRECL=450,BLKSIZE=6000),
+     * SPACE=(CYL,(5,5),RLSE),UNIT=SYSDA
+     */
+    private static final int QUICKREF_LRECL = 450;
+    private static final int QUICKREF_BLKSIZE = 6000;
+
     private DatasetBackup() {
     }
 
@@ -144,51 +153,63 @@ public final class DatasetBackup {
         try {
             /*
              * Step 1:
-             * Open source only to validate it and get dataset attributes.
-             * Then close it before BPXWDYN LIKE allocation.
+             * Open source directly.
+             * This avoids BPXWDYN allocation for the QuickRef report source dataset.
              */
             input = new ZFile("//'" + sourceDsn + "'", "rb,type=record,noseek");
-            log.debug("Opened source dataset for attribute check: " + sourceDsn);
+            log.debug("Opened source dataset: " + sourceDsn);
 
             if (input.getDsorg() != ZFile.DSORG_PS) {
                 throw new IllegalStateException(
                         "Only PS sequential datasets are supported. Source DSN=" + sourceDsn);
             }
 
-            int lrecl = input.getLrecl();
+            int sourceLrecl = input.getLrecl();
 
-            if (lrecl <= 0) {
+            if (sourceLrecl <= 0) {
                 throw new IllegalStateException(
-                        "Invalid LRECL from source dataset. Source DSN=" + sourceDsn + ", LRECL=" + lrecl);
+                        "Invalid LRECL from source dataset. Source DSN=" + sourceDsn
+                                + ", LRECL=" + sourceLrecl);
             }
 
-            log.debug("Source LRECL=" + lrecl);
+            if (sourceLrecl != QUICKREF_LRECL) {
+                log.warn("Source LRECL is " + sourceLrecl
+                        + ", but QuickRef backup target will be allocated with LRECL="
+                        + QUICKREF_LRECL + ". Source DSN=" + sourceDsn);
+            }
 
-            input.close();
-            input = null;
+            log.debug("Source LRECL=" + sourceLrecl);
 
             /*
              * Step 2:
-             * Allocate target after source is closed.
-             * This avoids FILE IN USE caused by LIKE(sourceDsn) while source is open.
+             * Allocate target explicitly using QuickRef report DCB/SPACE attributes.
+             * Do NOT use LIKE(sourceDsn), because it caused BPXWDYN FILE IN USE.
              */
             targetDd = ZFile.allocDummyDDName();
 
             ZFile.bpxwdyn(
-                    "alloc fi(" + targetDd + ") da('" + targetDsn + "') new catalog msg(2) " +
-                            "like('" + sourceDsn + "')");
+                    "alloc fi(" + targetDd + ") "
+                            + "da('" + targetDsn + "') "
+                            + "new catalog msg(2) "
+                            + "dsorg(ps) "
+                            + "recfm(v b a) "
+                            + "lrecl(" + QUICKREF_LRECL + ") "
+                            + "blksize(" + QUICKREF_BLKSIZE + ") "
+                            + "cylinders space(5,5) "
+                            + "release "
+                            + "unit(sysda)");
 
             targetAllocated = true;
             log.debug("Allocated target dataset: " + targetDsn);
 
-            /*
-             * Step 3:
-             * Reopen source and copy records.
-             */
-            input = new ZFile("//'" + sourceDsn + "'", "rb,type=record,noseek");
             output = new ZFile("//DD:" + targetDd, "wb,type=record,noseek");
 
-            byte[] buffer = new byte[lrecl];
+            /*
+             * Step 3:
+             * Copy records.
+             * Buffer uses source LRECL so it can safely read actual source records.
+             */
+            byte[] buffer = new byte[sourceLrecl];
             long recordCount = 0;
             int bytesRead;
 
@@ -207,7 +228,10 @@ public final class DatasetBackup {
             log.info("  Source DSN : " + sourceDsn);
             log.info("  Target DSN : " + targetDsn);
             log.info("  Records    : " + recordCount);
-            log.info("  LRECL      : " + lrecl);
+            log.info("  Source LRECL: " + sourceLrecl);
+            log.info("  Target LRECL: " + QUICKREF_LRECL);
+            log.info("  Target RECFM: VBA");
+            log.info("  Target BLKSIZE: " + QUICKREF_BLKSIZE);
 
             return true;
 
@@ -336,8 +360,8 @@ public final class DatasetBackup {
 
             if (!isValidDsnCharacter(ch)) {
                 throw new IllegalArgumentException(
-                        fieldName + " qualifier contains invalid character '" + ch + "'. " +
-                                "Qualifier=" + qualifier + ", DSN=" + fullDsn);
+                        fieldName + " qualifier contains invalid character '" + ch + "'. "
+                                + "Qualifier=" + qualifier + ", DSN=" + fullDsn);
             }
         }
     }
