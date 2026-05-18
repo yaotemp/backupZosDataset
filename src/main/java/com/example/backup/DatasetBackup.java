@@ -153,8 +153,26 @@ public final class DatasetBackup {
         try {
             /*
              * Step 1:
-             * Open source directly.
-             * This avoids BPXWDYN allocation for the QuickRef report source dataset.
+             * Allocate target first.
+             * Do not open source before target allocation.
+             */
+            targetDd = ZFile.allocDummyDDName();
+
+            ZFile.bpxwdyn(
+                    "alloc fi(" + targetDd + ") "
+                            + "da('" + targetDsn + "') "
+                            + "new catalog msg(2) "
+                            + "recfm(VBA) "
+                            + "lrecl(450) "
+                            + "cyl space(5,5) "
+                            + "unit(SYSDA)");
+
+            targetAllocated = true;
+            log.debug("Allocated target dataset: " + targetDsn);
+
+            /*
+             * Step 2:
+             * Open source after target allocation.
              */
             input = new ZFile("//'" + sourceDsn + "'", "rb,type=record,noseek");
             log.debug("Opened source dataset: " + sourceDsn);
@@ -174,41 +192,16 @@ public final class DatasetBackup {
 
             if (sourceLrecl != QUICKREF_LRECL) {
                 log.warn("Source LRECL is " + sourceLrecl
-                        + ", but QuickRef backup target will be allocated with LRECL="
-                        + QUICKREF_LRECL + ". Source DSN=" + sourceDsn);
+                        + ", expected QuickRef LRECL=" + QUICKREF_LRECL
+                        + ". Source DSN=" + sourceDsn);
             }
-
-            log.debug("Source LRECL=" + sourceLrecl);
-
-            /*
-             * Step 2:
-             * Allocate target explicitly using QuickRef report DCB/SPACE attributes.
-             * Do NOT use LIKE(sourceDsn), because it caused BPXWDYN FILE IN USE.
-             */
-            targetDd = ZFile.allocDummyDDName();
-
-            ZFile.bpxwdyn(
-                    "alloc fi(" + targetDd + ") "
-                            + "da('" + targetDsn + "') "
-                            + "new catalog msg(2) "
-                            + "dsorg(PS) "
-                            + "recfm(VBA) "
-                            + "lrecl(" + QUICKREF_LRECL + ") "
-                            + "blksize(" + QUICKREF_BLKSIZE + ") "
-                            + "space(5,5) cyl "
-                            + "rlse "
-                            + "unit(SYSDA)");
-
-            targetAllocated = true;
-            log.debug("Allocated target dataset: " + targetDsn);
-
-            output = new ZFile("//DD:" + targetDd, "wb,type=record,noseek");
 
             /*
              * Step 3:
-             * Copy records.
-             * Buffer uses source LRECL so it can safely read actual source records.
+             * Open target and copy records.
              */
+            output = new ZFile("//DD:" + targetDd, "wb,type=record,noseek");
+
             byte[] buffer = new byte[sourceLrecl];
             long recordCount = 0;
             int bytesRead;
@@ -231,7 +224,6 @@ public final class DatasetBackup {
             log.info("  Source LRECL: " + sourceLrecl);
             log.info("  Target LRECL: " + QUICKREF_LRECL);
             log.info("  Target RECFM: VBA");
-            log.info("  Target BLKSIZE: " + QUICKREF_BLKSIZE);
 
             return true;
 
